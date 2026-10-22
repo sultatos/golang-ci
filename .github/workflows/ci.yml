@@ -1,0 +1,125 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  pull_request:
+
+permissions:
+  contents: read
+
+env:
+  IMAGE: ghcr.io/${{ github.repository }}
+
+jobs:
+  check:
+    # Only vX.Y.Z is a consumable tag. Tags are immutable: a re-run skips a tag
+    # that is already published.
+    if: startsWith(github.ref, 'refs/tags/')
+    runs-on: ubuntu-24.04
+    permissions:
+      packages: read
+    outputs:
+      publish: ${{ steps.check.outputs.publish }}
+    steps:
+      - uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - id: check
+        run: |
+          printf '%s\n' "$GITHUB_REF_NAME" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+$' \
+            || { echo "ERROR: $GITHUB_REF_NAME: only vX.Y.Z is allowed"; exit 1; }
+          # Any failure other than a confirmed absent manifest stops the run, so an
+          # unreadable tag is never overwritten.
+          if out=$(docker buildx imagetools inspect "$IMAGE:$GITHUB_REF_NAME" 2>&1); then
+            echo "$IMAGE:$GITHUB_REF_NAME already published (immutable), skipping"
+            echo publish=false >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          case "$out" in
+            *"not found"*|*"manifest unknown"*|*MANIFEST_UNKNOWN*) echo publish=true >> "$GITHUB_OUTPUT" ;;
+            *) echo "ERROR: cannot inspect $IMAGE:$GITHUB_REF_NAME: $out"; exit 1 ;;
+          esac
+
+  build:
+    needs: check
+    if: always() && (needs.check.result == 'skipped' || needs.check.outputs.publish == 'true')
+    strategy:
+      matrix:
+        include:
+          - arch: amd64
+            runner: ubuntu-24.04
+          - arch: arm64
+            runner: ubuntu-24.04-arm
+    runs-on: ${{ matrix.runner }}
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v7
+      - uses: docker/setup-buildx-action@v4
+      - uses: docker/build-push-action@v7
+        with:
+          context: .
+          load: true
+          tags: golang-ci:smoke
+          cache-from: type=gha,scope=${{ matrix.arch }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.arch }}
+      - run: docker run --rm -v "$PWD/scripts:/s:ro" golang-ci:smoke sh /s/smoke.sh
+      - if: needs.check.outputs.publish == 'true'
+        uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - if: needs.check.outputs.publish == 'true'
+        id: push
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          platforms: linux/${{ matrix.arch }}
+          provenance: false
+          outputs: type=image,name=${{ env.IMAGE }},push-by-digest=true,name-canonical=true,push=true
+          cache-from: type=gha,scope=${{ matrix.arch }}
+      - if: needs.check.outputs.publish == 'true'
+        env:
+          DIGEST: ${{ steps.push.outputs.digest }}
+        run: |
+          mkdir -p "$RUNNER_TEMP/digests"
+          touch "$RUNNER_TEMP/digests/${DIGEST#sha256:}"
+      - if: needs.check.outputs.publish == 'true'
+        uses: actions/upload-artifact@v7
+        with:
+          name: digests-${{ matrix.arch }}
+          path: ${{ runner.temp }}/digests/*
+          if-no-files-found: error
+          retention-days: 1
+
+  publish:
+    # Joins the per-arch images into one multi-arch tag.
+    needs: [check, build]
+    if: needs.check.outputs.publish == 'true'
+    runs-on: ubuntu-24.04
+    permissions:
+      packages: write
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          pattern: digests-*
+          merge-multiple: true
+          path: ${{ runner.temp }}/digests
+      - uses: docker/setup-buildx-action@v4
+      - uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - working-directory: ${{ runner.temp }}/digests
+        run: |
+          set --
+          for d in *; do set -- "$@" "$IMAGE@sha256:$d"; done
+          docker buildx imagetools create -t "$IMAGE:$GITHUB_REF_NAME" "$@"
+          docker buildx imagetools inspect "$IMAGE:$GITHUB_REF_NAME"
