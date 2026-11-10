@@ -31,6 +31,7 @@ check buf /usr/local/bin buf --version
 check protoc-gen-go /usr/local/bin protoc-gen-go --version
 check protoc-gen-go-grpc /usr/local/bin protoc-gen-go-grpc --version
 check oapi-codegen /usr/local/bin oapi-codegen -version
+check just /usr/local/bin just --version
 check file /usr/bin file --version
 
 for d in /go/pkg/mod /root/.cache/go-build /root/.cache/golangci-lint /go/bin; do

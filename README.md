@@ -25,6 +25,7 @@ in `/usr/local/bin`:
 | protoc-gen-go | `PROTOC_GEN_GO_VERSION` |
 | protoc-gen-go-grpc | `PROTOC_GEN_GO_GRPC_VERSION` |
 | oapi-codegen | `OAPI_CODEGEN_VERSION` |
+| just (release binary, sha256-verified) | `JUST_VERSION` |
 | file | apt |
 
 The image carries no docker CLI or buildx.
@@ -42,13 +43,13 @@ GitHub Actions:
 jobs:
   test:
     runs-on: ubuntu-24.04
-    container: ghcr.io/sultatos/golang-ci:v1.1.0
+    container: ghcr.io/sultatos/golang-ci:v1.3.0
 ```
 
 Bitbucket Pipelines:
 
 ```yaml
-image: ghcr.io/sultatos/golang-ci:v1.1.0
+image: ghcr.io/sultatos/golang-ci:v1.3.0
 ```
 
 ## Build and check locally

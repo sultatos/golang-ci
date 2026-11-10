@@ -11,6 +11,7 @@ ARG BUF_VERSION=v1.72.0
 ARG PROTOC_GEN_GO_VERSION=v1.36.11
 ARG PROTOC_GEN_GO_GRPC_VERSION=v1.5.1
 ARG OAPI_CODEGEN_VERSION=v2.8.0
+ARG JUST_VERSION=1.59.0
 
 LABEL org.opencontainers.image.source="https://github.com/sultatos/golang-ci" \
       org.opencontainers.image.version.go="${GO_VERSION}" \
@@ -21,7 +22,8 @@ LABEL org.opencontainers.image.source="https://github.com/sultatos/golang-ci" \
       golang-ci.buf="${BUF_VERSION}" \
       golang-ci.protoc-gen-go="${PROTOC_GEN_GO_VERSION}" \
       golang-ci.protoc-gen-go-grpc="${PROTOC_GEN_GO_GRPC_VERSION}" \
-      golang-ci.oapi-codegen="${OAPI_CODEGEN_VERSION}"
+      golang-ci.oapi-codegen="${OAPI_CODEGEN_VERSION}" \
+      golang-ci.just="${JUST_VERSION}"
 
 RUN apt-get update \
     && apt-get install -y --no-install-recommends gcc libc6-dev make git curl ca-certificates file \
@@ -51,6 +53,18 @@ RUN set -eu; \
     grep " ${tarball}\$" "golangci-lint-${v}-checksums.txt" | sha256sum -c -; \
     tar -xzf "${tarball}" --strip-components=1 -C /usr/local/bin "golangci-lint-${v}-linux-${TARGETARCH}/golangci-lint"; \
     rm -f /tmp/golangci-lint-*
+
+# just ships static musl release binaries; the tarball is verified against the published checksum file.
+RUN set -eu; \
+    case "${TARGETARCH}" in amd64) arch=x86_64 ;; arm64) arch=aarch64 ;; *) echo "unsupported arch ${TARGETARCH}" >&2; exit 1 ;; esac; \
+    base="https://github.com/casey/just/releases/download/${JUST_VERSION}"; \
+    tarball="just-${JUST_VERSION}-${arch}-unknown-linux-musl.tar.gz"; \
+    cd /tmp; \
+    curl -fsSLO "${base}/${tarball}"; \
+    curl -fsSLO "${base}/SHA256SUMS"; \
+    grep " ${tarball}\$" SHA256SUMS | sha256sum -c -; \
+    tar -xzf "${tarball}" -C /usr/local/bin just; \
+    rm -f /tmp/just-* /tmp/SHA256SUMS
 
 RUN GOBIN=/usr/local/bin go install "github.com/securego/gosec/v2/cmd/gosec@${GOSEC_VERSION}" \
     && GOBIN=/usr/local/bin go install "golang.org/x/vuln/cmd/govulncheck@${GOVULNCHECK_VERSION}" \
